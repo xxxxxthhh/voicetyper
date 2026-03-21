@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicetyper.app</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Update this path to your Python 3 -->
+        <string>/usr/local/bin/python3</string>
+        <!-- Update this path to where you cloned voicetyper -->
+        <string>/path/to/voicetyper/run.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <!-- Update this path -->
+    <string>/path/to/voicetyper</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GROQ_API_KEY</key>
+        <!-- Your Groq API key -->
+        <string>YOUR_KEY_HERE</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/tmp/voicetyper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/voicetyper.err</string>
+</dict>
+</plist>
+<!-- 
+  Install:
+    1. Edit paths above
+    2. cp com.voicetyper.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.voicetyper.plist
+  
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.voicetyper.plist
+-->

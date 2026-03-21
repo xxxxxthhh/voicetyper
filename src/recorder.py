@@ -1,10 +1,80 @@
 """Audio recording using sounddevice."""
+import ctypes.util
+import importlib
+import os
+from pathlib import Path
+import sys
 import threading
 import time
+from typing import Any
+
 import numpy as np
-import sounddevice as sd
-import soundfile as sf
+
 from src.config import SAMPLE_RATE, CHANNELS, DATA_DIR, VAD_RMS_THRESHOLD
+from src.audio_io import write_wav
+
+
+def _portaudio_candidates() -> list[str]:
+    """Resolve likely libportaudio paths in bundled app and local system."""
+    exe = Path(sys.executable).resolve()
+    contents_dir = exe.parent.parent
+    frameworks_dir = contents_dir / "Frameworks"
+    resources_dir = contents_dir / "Resources"
+    bundled_py_dir = resources_dir / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+    candidates: list[str] = []
+    env_path = os.environ.get("VOICETYPER_PORTAUDIO_LIB", "").strip()
+    if env_path:
+        candidates.append(env_path)
+
+    candidates.extend(
+        [
+            str(frameworks_dir / "libportaudio.2.dylib"),
+            str(frameworks_dir / "libportaudio.dylib"),
+            str(resources_dir / "_sounddevice_data" / "portaudio-binaries" / "libportaudio.dylib"),
+            str(bundled_py_dir / "_sounddevice_data" / "portaudio-binaries" / "libportaudio.dylib"),
+            str(resources_dir / "libportaudio.2.dylib"),
+            str(resources_dir / "libportaudio.dylib"),
+            "/opt/homebrew/lib/libportaudio.2.dylib",
+            "/opt/homebrew/lib/libportaudio.dylib",
+            "/usr/local/lib/libportaudio.2.dylib",
+            "/usr/local/lib/libportaudio.dylib",
+        ]
+    )
+
+    existing: list[str] = []
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if Path(candidate).exists():
+            existing.append(candidate)
+    return existing
+
+
+def _import_sounddevice() -> Any:
+    """Import sounddevice with a patched find_library to prefer bundled PortAudio."""
+    original_find_library = ctypes.util.find_library
+    candidates = _portaudio_candidates()
+
+    def _find_library_patched(name: str) -> str | None:
+        if name in {"portaudio", "libportaudio.dylib", "libportaudio"}:
+            for candidate in candidates:
+                return candidate
+        return original_find_library(name)
+
+    ctypes.util.find_library = _find_library_patched
+    try:
+        return importlib.import_module("sounddevice")
+    except Exception as exc:
+        hint = ", ".join(candidates) if candidates else "none found"
+        raise RuntimeError(
+            "Unable to load sounddevice/PortAudio. "
+            f"Tried bundled/system libraries: {hint}"
+        ) from exc
+    finally:
+        ctypes.util.find_library = original_find_library
 
 
 class Recorder:
@@ -14,7 +84,8 @@ class Recorder:
         self._frames: list[np.ndarray] = []
         self._recording = False
         self._lock = threading.Lock()
-        self._stream: sd.InputStream | None = None
+        self._stream: Any | None = None
+        self._sd: Any | None = None
         self._started_at = 0.0
         self._last_voice_at = 0.0
         self._voice_detected = False
@@ -34,6 +105,7 @@ class Recorder:
             self._started_at = now
             self._last_voice_at = now
             self._voice_detected = False
+            sd = self._get_sounddevice()
             try:
                 self._stream = sd.InputStream(
                     samplerate=SAMPLE_RATE,
@@ -85,11 +157,16 @@ class Recorder:
 
             filename = f"recording-{threading.get_ident()}-{int(time.time() * 1000)}.wav"
             audio_path = DATA_DIR / filename
-            sf.write(str(audio_path), audio, SAMPLE_RATE)
+            write_wav(audio_path, audio, SAMPLE_RATE)
             self._started_at = 0.0
             self._last_voice_at = 0.0
             self._voice_detected = False
             return str(audio_path)
+
+    def _get_sounddevice(self) -> Any:
+        if self._sd is None:
+            self._sd = _import_sounddevice()
+        return self._sd
 
     def get_duration(self) -> float:
         """Get current recording duration in seconds."""

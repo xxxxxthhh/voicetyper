@@ -2,7 +2,6 @@
 import threading
 import time
 from pathlib import Path
-import soundfile as sf
 import rumps
 from pynput import keyboard
 
@@ -17,6 +16,7 @@ from src.config import (
     SAMPLE_RATE,
 )
 from src.recorder import Recorder
+from src.audio_io import write_wav
 from src.transcriber import Transcriber
 from src.paster import (
     paste_text,
@@ -349,7 +349,7 @@ class VoiceTyperApp(rumps.App):
                         DATA_DIR / f"preview-{threading.get_ident()}-{int(time.time() * 1000)}.wav"
                     )
                     try:
-                        sf.write(str(preview_path), audio, SAMPLE_RATE)
+                        write_wav(preview_path, audio, SAMPLE_RATE)
                         preview_result = preview_transcriber.transcribe(str(preview_path))
                     except Exception:
                         continue

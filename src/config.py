@@ -1,4 +1,5 @@
 """VoiceTyper configuration."""
+import json
 import os
 from pathlib import Path
 
@@ -7,6 +8,7 @@ DATA_DIR = Path.home() / ".voicetyper"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = DATA_DIR / "history.db"
+CONFIG_PATH = DATA_DIR / "config.json"
 
 # Audio settings
 SAMPLE_RATE = 16000  # Whisper expects 16kHz
@@ -54,7 +56,21 @@ AI_REWRITE_TIMEOUT_SECS = float(
 AI_REWRITE_MAX_CHARS = int(os.environ.get("VOICETYPER_AI_REWRITE_MAX_CHARS", "700"))
 
 # Groq API
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+def _load_api_key_from_config_file() -> str:
+    """Load Groq API key from ~/.voicetyper/config.json."""
+    try:
+        if not CONFIG_PATH.exists():
+            return ""
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(cfg, dict):
+            return ""
+        return str(cfg.get("groq_api_key", "")).strip()
+    except Exception:
+        return ""
+
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip() or _load_api_key_from_config_file()
 GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 WHISPER_MODEL = "whisper-large-v3"
 

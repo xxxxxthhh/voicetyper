@@ -35,6 +35,15 @@ export GROQ_API_KEY="your-key-here"
 python3 run.py
 ```
 
+Or store key in config file (recommended for `.app` usage):
+
+```bash
+mkdir -p ~/.voicetyper
+cat > ~/.voicetyper/config.json <<'EOF'
+{"groq_api_key":"gsk_xxx"}
+EOF
+```
+
 ## macOS Permissions
 
 On first run, you'll need to grant:
@@ -95,6 +104,33 @@ export VOICETYPER_AI_REWRITE_MODELS="qwen/qwen3-32b,llama-3.1-8b-instant,llama-3
 export VOICETYPER_AI_REWRITE_TIMEOUT_SECS=8
 export VOICETYPER_AI_REWRITE_MAX_CHARS=700
 ```
+
+If `GROQ_API_KEY` is not set, app falls back to:
+- `~/.voicetyper/config.json` -> `{"groq_api_key":"..."}`
+
+## Package as macOS App
+
+```bash
+# 1) install build tool
+pip3 install py2app
+
+# 2) clean old build
+rm -rf build dist .eggs
+
+# 3) build app
+python3 setup.py py2app
+
+# 4) ad-hoc sign (local use)
+codesign --force --deep --sign - dist/VoiceTyper.app
+
+# 5) run
+open dist/VoiceTyper.app
+```
+
+Notes:
+- Entry/build config is in `setup.py`.
+- For menu bar behavior, `LSUIElement` is enabled in app plist.
+- If app cannot capture/paste after rebuild, re-grant permissions to `dist/VoiceTyper.app`.
 
 ## Quick Test Checklist
 

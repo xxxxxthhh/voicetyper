@@ -13,6 +13,7 @@ Press a hotkey, speak, and text appears at your cursor.
 - **AI punctuation/segmentation rewrite** with Groq chat model fallback chain
 - **Auto-paste** to current cursor position
 - **Clipboard-first output** (always copies text, then tries to paste into previous app)
+- **On-screen visual HUD** for Recording / Transcribing / Done states
 - **Voice commands** (换行 / 撤销 / 风格切换)
 - **Smart text formatting** (Normal / English / Chinese / Code)
 - **SQLite history** of all transcriptions
@@ -63,7 +64,7 @@ Go to System Settings → Privacy & Security → grant access to Terminal/Python
 - 🎙️ = Idle, ready
 - 🔴 = Recording
 - ⏳ = Transcribing
-- Click for options: style switch, live preview toggle, history, quit
+- Click for options: style switch, live preview toggle, visual HUD toggle, history, quit
 
 ## Voice Commands
 
@@ -103,10 +104,24 @@ export VOICETYPER_AI_REWRITE_ENABLED=1
 export VOICETYPER_AI_REWRITE_MODELS="qwen/qwen3-32b,llama-3.1-8b-instant,llama-3.3-70b-versatile"
 export VOICETYPER_AI_REWRITE_TIMEOUT_SECS=8
 export VOICETYPER_AI_REWRITE_MAX_CHARS=700
+
+# optional: pause-aware segmentation (Whisper segments)
+export VOICETYPER_PAUSE_SEGMENT_ENABLED=1
+export VOICETYPER_PAUSE_BREAK_SECS=0.35
+export VOICETYPER_PAUSE_STRONG_BREAK_SECS=0.75
+export VOICETYPER_PAUSE_MIN_CHARS=8
+# optional: promote weak punctuation (comma/semicolon) to stronger stop on long pause
+export VOICETYPER_PAUSE_PROMOTE_WEAK_PUNCT=0
+# debug pause segmentation decisions in terminal
+export VOICETYPER_PAUSE_SEGMENT_DEBUG=0
 ```
 
 If `GROQ_API_KEY` is not set, app falls back to:
 - `~/.voicetyper/config.json` -> `{"groq_api_key":"..."}`
+
+Custom term corrections (optional):
+- `~/.voicetyper/terms.json` -> `{"飞梳":"飞书","telegarm":"telegram"}`
+- Applied to both raw transcription text and AI rewrite output.
 
 ## Package as macOS App
 
@@ -141,6 +156,7 @@ After launch (`python3 run.py`), verify:
 3. During transcription, icon changes to ⏳ and returns to 🎙️ afterward.
 4. If transcription succeeds, status shows `Copied+Pasted: ...` (or `Copied only: ...`) and appears in history.
 5. For long Chinese dictation with pauses, confirm output is segmented naturally (AI rewrite enabled).
+   Pause-aware segmentation can insert comma/period before AI rewrite.
 6. Say `english mode` (or `中文模式`) and verify style switches.
 7. Say `new line` and `undo` to verify voice commands execute.
 8. If API/network fails, app shows an error notification and stays responsive.
@@ -151,6 +167,10 @@ After launch (`python3 run.py`), verify:
 - No paste output: check Accessibility permission for Terminal/Python; text should still be in clipboard (`Cmd+V` manually).
 - API usage too high: set `VOICETYPER_LIVE_PREVIEW_ENABLED=0` or increase `VOICETYPER_LIVE_PREVIEW_INTERVAL_SECS`.
 - AI rewrite latency/cost too high: set `VOICETYPER_AI_REWRITE_ENABLED=0` or keep only one fast model in `VOICETYPER_AI_REWRITE_MODELS`.
+- Pause segmentation too aggressive: increase `VOICETYPER_PAUSE_BREAK_SECS` / `VOICETYPER_PAUSE_STRONG_BREAK_SECS`.
+- Pause segmentation still not splitting: lower `VOICETYPER_PAUSE_BREAK_SECS` (e.g. `0.28`) and set `VOICETYPER_PAUSE_SEGMENT_DEBUG=1` to inspect applied pause boundaries.
+- Prefer preserving weak punctuation (comma/dunhao): keep `VOICETYPER_PAUSE_PROMOTE_WEAK_PUNCT=0` (default).
+- Wrong homophone words (e.g. 飞梳/飞书): add mapping in `~/.voicetyper/terms.json`.
 - Stuck on `Transcribing...`: lower network risk by setting `VOICETYPER_TRANSCRIBE_HARD_TIMEOUT_SECS` (default 45s), app will auto-recover.
 - pyenv + rumps notification error (`Info.plist` / `CFBundleIdentifier`): app now auto-falls back to no notifications, voice typing still works.
 - `GROQ_API_KEY` missing: set it before running:

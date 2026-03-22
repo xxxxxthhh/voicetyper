@@ -55,6 +55,16 @@ AI_REWRITE_TIMEOUT_SECS = float(
 )
 AI_REWRITE_MAX_CHARS = int(os.environ.get("VOICETYPER_AI_REWRITE_MAX_CHARS", "700"))
 
+# Pause-aware sentence segmentation (uses Whisper segment timing).
+PAUSE_SEGMENT_ENABLED = os.environ.get("VOICETYPER_PAUSE_SEGMENT_ENABLED", "1") != "0"
+PAUSE_BREAK_SECS = float(os.environ.get("VOICETYPER_PAUSE_BREAK_SECS", "0.35"))
+PAUSE_STRONG_BREAK_SECS = float(
+    os.environ.get("VOICETYPER_PAUSE_STRONG_BREAK_SECS", "0.75")
+)
+PAUSE_MIN_CHARS = int(os.environ.get("VOICETYPER_PAUSE_MIN_CHARS", "8"))
+PAUSE_PROMOTE_WEAK_PUNCT = os.environ.get("VOICETYPER_PAUSE_PROMOTE_WEAK_PUNCT", "0") == "1"
+PAUSE_SEGMENT_DEBUG = os.environ.get("VOICETYPER_PAUSE_SEGMENT_DEBUG", "0") == "1"
+
 # Groq API
 
 def _load_api_key_from_config_file() -> str:

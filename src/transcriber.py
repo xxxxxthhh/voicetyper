@@ -12,10 +12,14 @@ class Transcriber:
     def transcribe(self, audio_path: str) -> dict:
         """
         Transcribe an audio file.
-        Returns: {"text": str, "language": str | None}
+        Returns: {"text": str, "language": str | None, "segments": list[dict]}
         """
         if not GROQ_API_KEY:
-            return {"text": "[Error: GROQ_API_KEY not set]", "language": None}
+            return {
+                "text": "[Error: GROQ_API_KEY not set]",
+                "language": None,
+                "segments": [],
+            }
 
         with open(audio_path, "rb") as f:
             data = {
@@ -36,12 +40,14 @@ class Transcriber:
                 return {
                     "text": f"[Network error: {exc}]",
                     "language": None,
+                    "segments": [],
                 }
 
         if resp.status_code != 200:
             return {
                 "text": f"[Transcription error: {resp.status_code}]",
                 "language": None,
+                "segments": [],
             }
 
         try:
@@ -50,11 +56,41 @@ class Transcriber:
             return {
                 "text": "[Transcription error: invalid JSON response]",
                 "language": None,
+                "segments": [],
             }
+        segments = _normalize_segments(result.get("segments"))
         return {
             "text": result.get("text", "").strip(),
             "language": result.get("language"),
+            "segments": segments,
         }
 
     def close(self):
         self._client.close()
+
+
+def _normalize_segments(raw_segments) -> list[dict]:
+    if not isinstance(raw_segments, list):
+        return []
+    out: list[dict] = []
+    for seg in raw_segments:
+        if not isinstance(seg, dict):
+            continue
+        try:
+            start = float(seg.get("start"))
+            end = float(seg.get("end"))
+        except Exception:
+            continue
+        if end < start:
+            continue
+        text = str(seg.get("text", "")).strip()
+        if not text:
+            continue
+        out.append(
+            {
+                "start": start,
+                "end": end,
+                "text": text,
+            }
+        )
+    return out

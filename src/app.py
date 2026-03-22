@@ -33,6 +33,8 @@ from src.text_formatter import (
     format_text,
 )
 from src.text_rewriter import TextRewriter
+from src.pause_segmenter import apply_pause_segmentation
+from src.visual_hud import VisualHUD
 from src.voice_commands import (
     parse_voice_command,
     CMD_NEWLINE,
@@ -63,6 +65,7 @@ class VoiceTyperApp(rumps.App):
         self.mode = MODE_TOGGLE
         self.input_style = STYLE_NORMAL
         self._live_preview_enabled = LIVE_PREVIEW_ENABLED
+        self._visual_hud_enabled = True
         self._pressed_keys: set = set()
         self._toggle_hotkey_latched = False
         self._notifications_enabled = True
@@ -70,6 +73,7 @@ class VoiceTyperApp(rumps.App):
         self._live_preview_stop = threading.Event()
         self._live_preview_thread: threading.Thread | None = None
         self._recording_session_id = 0
+        self.visual_hud = VisualHUD(enabled=self._visual_hud_enabled)
 
         # Build menu
         self.mode_toggle = rumps.MenuItem(
@@ -85,6 +89,10 @@ class VoiceTyperApp(rumps.App):
             f"Live Preview: {'On' if self._live_preview_enabled else 'Off'}",
             callback=self._toggle_live_preview,
         )
+        self.hud_toggle = rumps.MenuItem(
+            f"Visual HUD: {'On' if self._visual_hud_enabled else 'Off'}",
+            callback=self._toggle_visual_hud,
+        )
         self.status_item = rumps.MenuItem("Ready", callback=None)
         self.status_item.set_callback(None)
 
@@ -94,6 +102,7 @@ class VoiceTyperApp(rumps.App):
             self.mode_toggle,
             self.style_toggle,
             self.preview_toggle,
+            self.hud_toggle,
             rumps.MenuItem("History (last 5)", callback=self._show_history),
             None,
             rumps.MenuItem("Quit", callback=self._quit),
@@ -161,6 +170,7 @@ class VoiceTyperApp(rumps.App):
         except Exception as exc:
             self.title = "🎙️"
             self.status_item.title = "Ready"
+            self.visual_hud.show_error("Recording failed")
             self._notify(
                 title="VoiceTyper",
                 subtitle="Recording failed",
@@ -170,6 +180,7 @@ class VoiceTyperApp(rumps.App):
             return
 
         self._recording_session_id += 1
+        self.visual_hud.show_recording()
         if self._live_preview_enabled:
             self._start_live_preview(self._recording_session_id)
 
@@ -188,6 +199,7 @@ class VoiceTyperApp(rumps.App):
             self._live_preview_stop.set()
             self.title = "⏳"
             self.status_item.title = "Transcribing..."
+            self.visual_hud.show_transcribing()
 
             # Get source app before we lose focus
             source_app = get_frontmost_app()
@@ -197,6 +209,7 @@ class VoiceTyperApp(rumps.App):
         if not audio_path:
             self.title = "🎙️"
             self.status_item.title = "Ready"
+            self.visual_hud.hide()
             return
 
         # Transcribe in background to not block
@@ -221,6 +234,7 @@ class VoiceTyperApp(rumps.App):
                         f"[Transcription timeout: exceeded {TRANSCRIBE_HARD_TIMEOUT_SECS:.0f}s]"
                     )
                     self.status_item.title = "Error: transcription timeout"
+                    self.visual_hud.show_error("Timeout")
                     self._notify(
                         title="VoiceTyper",
                         subtitle="Transcription timed out",
@@ -232,7 +246,7 @@ class VoiceTyperApp(rumps.App):
                 if "error" in error_holder:
                     raise error_holder["error"]
 
-                result = result_holder.get("result", {"text": "", "language": None})
+                result = result_holder.get("result", {"text": "", "language": None, "segments": []})
                 text = result["text"]
 
                 if text and not text.startswith("["):
@@ -241,6 +255,7 @@ class VoiceTyperApp(rumps.App):
                         self._apply_voice_command(command)
                         cmd_name = command["name"]
                         self.status_item.title = f"Command: {cmd_name}"
+                        self.visual_hud.show_done("Command sent")
                         self._notify(
                             title="VoiceTyper",
                             subtitle="Voice command executed",
@@ -248,10 +263,16 @@ class VoiceTyperApp(rumps.App):
                             sound=False,
                         )
                     else:
-                        rewritten = self.rewriter.rewrite(text, self.input_style)
+                        pause_segmented = apply_pause_segmentation(
+                            text=text,
+                            segments=result.get("segments"),
+                            style=self.input_style,
+                        )
+                        rewritten = self.rewriter.rewrite(pause_segmented, self.input_style)
                         final_text = format_text(rewritten, self.input_style)
                         if not final_text:
                             self.status_item.title = "Error: empty text"
+                            self.visual_hud.show_error("Empty text")
                             self._notify(
                                 title="VoiceTyper",
                                 subtitle="Transcription failed",
@@ -276,10 +297,13 @@ class VoiceTyperApp(rumps.App):
 
                         if pasted:
                             self.status_item.title = f"Copied+Pasted: {final_text[:30]}..."
+                            self.visual_hud.show_done("Pasted")
                         elif copied:
                             self.status_item.title = f"Copied only: {final_text[:31]}..."
+                            self.visual_hud.show_done("Copied")
                         else:
                             self.status_item.title = "Error: clipboard write failed"
+                            self.visual_hud.show_error("Clipboard failed")
                         self._notify(
                             title="VoiceTyper",
                             subtitle="Transcribed output ready",
@@ -289,6 +313,7 @@ class VoiceTyperApp(rumps.App):
                 else:
                     message = text or "[Transcription returned empty text]"
                     self.status_item.title = f"Error: {message}"
+                    self.visual_hud.show_error("Transcription failed")
                     self._notify(
                         title="VoiceTyper",
                         subtitle="Transcription failed",
@@ -298,6 +323,7 @@ class VoiceTyperApp(rumps.App):
             except Exception as exc:
                 message = f"[Unexpected transcription error: {exc}]"
                 self.status_item.title = "Error: unexpected transcription failure"
+                self.visual_hud.show_error("Transcription failed")
                 self._notify(
                     title="VoiceTyper",
                     subtitle="Transcription failed",
@@ -426,6 +452,17 @@ class VoiceTyperApp(rumps.App):
             sound=False,
         )
 
+    def _toggle_visual_hud(self, sender):
+        self._visual_hud_enabled = not self._visual_hud_enabled
+        self.visual_hud.set_enabled(self._visual_hud_enabled)
+        self.hud_toggle.title = f"Visual HUD: {'On' if self._visual_hud_enabled else 'Off'}"
+        self._notify(
+            title="VoiceTyper",
+            subtitle="Visual HUD updated",
+            message=self.hud_toggle.title,
+            sound=False,
+        )
+
     def _show_history(self, sender):
         recent = get_recent(5)
         if not recent:
@@ -446,6 +483,7 @@ class VoiceTyperApp(rumps.App):
 
     def _quit(self, sender):
         self._live_preview_stop.set()
+        self.visual_hud.close()
         self.rewriter.close()
         self.transcriber.close()
         rumps.quit_application()

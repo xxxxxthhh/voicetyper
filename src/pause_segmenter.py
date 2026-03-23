@@ -9,12 +9,39 @@ from src.config import (
     PAUSE_BREAK_SECS,
     PAUSE_STRONG_BREAK_SECS,
     PAUSE_MIN_CHARS,
+    PAUSE_HINT_MIN_GAP_SECS,
+    PAUSE_HINT_MAX_ITEMS,
     PAUSE_PROMOTE_WEAK_PUNCT,
     PAUSE_SEGMENT_DEBUG,
 )
 from src.text_formatter import STYLE_CODE, STYLE_CHINESE, STYLE_ENGLISH
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def build_pause_hints(segments: list[dict] | None) -> str | None:
+    """
+    Build compact pause hints for the AI rewriter.
+    This is used by AI-first mode instead of inserting punctuation directly.
+    """
+    if not segments or len(segments) < 2:
+        return None
+    normalized = _prepare_segments(segments)
+    if len(normalized) < 2:
+        return None
+
+    hints: list[str] = []
+    for i, (cur, nxt) in enumerate(zip(normalized, normalized[1:]), start=1):
+        gap = nxt["start"] - cur["end"]
+        if gap < PAUSE_HINT_MIN_GAP_SECS:
+            continue
+        level = "strong" if gap >= PAUSE_STRONG_BREAK_SECS else "weak"
+        hints.append(f"{i}. gap={gap:.2f}s ({level})")
+        if len(hints) >= PAUSE_HINT_MAX_ITEMS:
+            break
+    if not hints:
+        return None
+    return "Pause hints: " + "; ".join(hints)
 
 
 def apply_pause_segmentation(text: str, segments: list[dict] | None, style: str) -> str:

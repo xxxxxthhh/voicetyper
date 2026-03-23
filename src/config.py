@@ -54,11 +54,18 @@ AI_REWRITE_TIMEOUT_SECS = float(
     os.environ.get("VOICETYPER_AI_REWRITE_TIMEOUT_SECS", "8")
 )
 AI_REWRITE_MAX_CHARS = int(os.environ.get("VOICETYPER_AI_REWRITE_MAX_CHARS", "700"))
+# AI-first flow: prioritize model-based punctuation/segmentation,
+# keep rule-based segmentation only as fallback.
+AI_FIRST_ENABLED = os.environ.get("VOICETYPER_AI_FIRST_ENABLED", "1") != "0"
 
 # Auto terminal punctuation behavior.
 # Only append terminal punctuation automatically when utterance is long enough.
 AUTO_TERMINAL_MIN_CHARS = int(
     os.environ.get("VOICETYPER_AUTO_TERMINAL_MIN_CHARS", "14")
+)
+# Optional deterministic clause splitting fallback for long CJK text.
+RULE_CJK_SPLIT_FALLBACK_ENABLED = (
+    os.environ.get("VOICETYPER_RULE_CJK_SPLIT_FALLBACK_ENABLED", "0") == "1"
 )
 
 # Pause-aware sentence segmentation (uses Whisper segment timing).
@@ -68,8 +75,16 @@ PAUSE_STRONG_BREAK_SECS = float(
     os.environ.get("VOICETYPER_PAUSE_STRONG_BREAK_SECS", "0.75")
 )
 PAUSE_MIN_CHARS = int(os.environ.get("VOICETYPER_PAUSE_MIN_CHARS", "8"))
+PAUSE_HINT_MIN_GAP_SECS = float(
+    os.environ.get("VOICETYPER_PAUSE_HINT_MIN_GAP_SECS", "0.45")
+)
+PAUSE_HINT_MAX_ITEMS = int(os.environ.get("VOICETYPER_PAUSE_HINT_MAX_ITEMS", "4"))
 PAUSE_PROMOTE_WEAK_PUNCT = os.environ.get("VOICETYPER_PAUSE_PROMOTE_WEAK_PUNCT", "0") == "1"
 PAUSE_SEGMENT_DEBUG = os.environ.get("VOICETYPER_PAUSE_SEGMENT_DEBUG", "0") == "1"
+
+# Pipeline debug logs (prints ASR vs AI output in terminal).
+DEBUG_PIPELINE_ENABLED = os.environ.get("VOICETYPER_DEBUG_PIPELINE_ENABLED", "0") == "1"
+DEBUG_PIPELINE_MAX_CHARS = int(os.environ.get("VOICETYPER_DEBUG_PIPELINE_MAX_CHARS", "240"))
 
 # Groq API
 

@@ -1,5 +1,8 @@
 """Optional AI rewriting pass for punctuation and sentence segmentation."""
+from __future__ import annotations
+
 import json
+import os
 import re
 import unicodedata
 from bisect import bisect_right
@@ -16,6 +19,8 @@ from src.config import (
     AI_REWRITE_MAX_CHARS,
     DATA_DIR,
 )
+
+_REWRITER_DEBUG = os.environ.get("VOICETYPER_REWRITER_DEBUG", "0") == "1"
 from src.text_formatter import (
     STYLE_CODE,
     STYLE_NORMAL,
@@ -26,6 +31,7 @@ from src.text_formatter import (
 _GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 _CONTENT_RE = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]")
 _TERMS_PATH = DATA_DIR / "terms.json"
+_SENTENCE_PUNCT = set("，。！？；：,.!?;:")
 _LEADING_PREFIX_PATTERNS = [
     re.compile(r"^(?:我(?:已经|刚刚)?(?:修复|修正|润色|优化)了?(?:这段)?文本[:：]\s*)"),
     re.compile(r"^(?:修复后(?:文本)?|修正后(?:文本)?|润色后(?:文本)?|优化后(?:文本)?|处理后(?:文本)?|最终文本|结果)[:：]\s*"),
@@ -46,7 +52,7 @@ class TextRewriter:
             httpx.Client(timeout=AI_REWRITE_TIMEOUT_SECS) if self.enabled else None
         )
 
-    def rewrite(self, text: str, style: str) -> str:
+    def rewrite(self, text: str, style: str, pause_hints: str | None = None) -> str:
         text = _apply_term_replacements(text, self._terms)
         if not self.enabled:
             return text
@@ -59,7 +65,9 @@ class TextRewriter:
         if not self._client:
             return text
 
-        prompt = _build_prompt(style)
+        need_punct_boost = _needs_punctuation_boost(text, style)
+        prompt = _build_prompt(style, has_pause_hints=bool(pause_hints))
+        user_content = _build_user_content(text, pause_hints)
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
 
         for model in self._models:
@@ -68,7 +76,7 @@ class TextRewriter:
                 "temperature": 0,
                 "messages": [
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": text},
+                    {"role": "user", "content": user_content},
                 ],
             }
             try:
@@ -77,31 +85,127 @@ class TextRewriter:
                     headers=headers,
                     json=payload,
                 )
-            except httpx.RequestError:
+            except httpx.RequestError as exc:
+                _rdebug(f"model={model} request error: {exc}")
                 continue
 
             if resp.status_code != 200:
+                _rdebug(f"model={model} HTTP {resp.status_code}")
                 continue
 
             try:
                 data = resp.json()
                 out = data["choices"][0]["message"]["content"].strip()
-            except Exception:
+            except Exception as exc:
+                _rdebug(f"model={model} parse error: {exc}")
                 continue
 
+            _rdebug(f"model={model} raw_out={out!r}")
             out = _cleanup_output(out)
             if not out:
+                _rdebug(f"model={model} empty after cleanup")
                 continue
             out = _apply_term_replacements(out, self._terms)
+            # Early exit: if cleanup reduced output to identical input, this model
+            # added nothing useful (e.g. only wrapped text in quotes).
+            if out == text:
+                _rdebug(f"model={model} output identical to input after cleanup, skipping")
+                continue
             if not _is_safe_micro_edit(text, out):
-                projected = _project_punctuation_from_rewrite(text, out)
-                if projected and _is_safe_micro_edit(text, projected):
-                    return projected
-                continue
+                _rdebug(
+                    f"model={model} safe_micro_edit FAILED "
+                    f"src_norm={_normalized_content(text)!r} "
+                    f"out_norm={_normalized_content(out)!r}"
+                )
+                # Re-clean: strip residual trailing quotes the model may have added
+                out2 = _strip_residual_quotes(out)
+                if out2 != out and _is_safe_micro_edit(text, out2):
+                    _rdebug(f"model={model} recovered after residual quote strip")
+                    out = out2
+                else:
+                    projected = _project_punctuation_from_rewrite(text, out)
+                    if projected and projected != text:
+                        # projection guarantees content unchanged; accept directly
+                        _rdebug(f"model={model} using punctuation projection")
+                        out = projected
+                    else:
+                        _rdebug(f"model={model} projection failed or no-op, skipping")
+                        continue
             if _looks_too_different(text, out):
+                _rdebug(f"model={model} looks_too_different, skipping")
                 continue
+            if need_punct_boost and _punctuation_gain(text, out) <= 0:
+                _rdebug(f"model={model} need_punct_boost but no gain, skipping")
+                continue
+            _rdebug(f"model={model} ACCEPTED out={out!r}")
             return out
 
+        # AI-first punctuation boost pass:
+        # if the first pass keeps long run-on text unchanged,
+        # do one extra AI-only pass focused on comma segmentation.
+        if need_punct_boost:
+            _rdebug("entering punct_boost pass")
+            boost_prompt = _build_punct_boost_prompt(style, has_pause_hints=bool(pause_hints))
+            for model in self._models:
+                payload = {
+                    "model": model,
+                    "temperature": 0.3,
+                    "messages": [
+                        {"role": "system", "content": boost_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                }
+                try:
+                    resp = self._client.post(
+                        _GROQ_CHAT_URL,
+                        headers=headers,
+                        json=payload,
+                    )
+                except httpx.RequestError as exc:
+                    _rdebug(f"boost model={model} request error: {exc}")
+                    continue
+
+                if resp.status_code != 200:
+                    _rdebug(f"boost model={model} HTTP {resp.status_code}")
+                    continue
+
+                try:
+                    data = resp.json()
+                    out = data["choices"][0]["message"]["content"].strip()
+                except Exception as exc:
+                    _rdebug(f"boost model={model} parse error: {exc}")
+                    continue
+
+                _rdebug(f"boost model={model} raw_out={out!r}")
+                out = _cleanup_output(out)
+                if not out:
+                    _rdebug(f"boost model={model} empty after cleanup")
+                    continue
+                out = _apply_term_replacements(out, self._terms)
+                if out == text:
+                    _rdebug(f"boost model={model} output identical to input after cleanup, skipping")
+                    continue
+                if not _is_safe_micro_edit(text, out):
+                    out2 = _strip_residual_quotes(out)
+                    if out2 != out and _is_safe_micro_edit(text, out2):
+                        out = out2
+                    else:
+                        projected = _project_punctuation_from_rewrite(text, out)
+                        if projected and projected != text:
+                            out = projected
+                        else:
+                            _rdebug(f"boost model={model} safe_micro_edit failed, skipping")
+                            continue
+                if _looks_too_different(text, out):
+                    _rdebug(f"boost model={model} looks_too_different, skipping")
+                    continue
+                if _punctuation_gain(text, out) <= 0:
+                    _rdebug(f"boost model={model} no punct gain, skipping")
+                    continue
+                _rdebug(f"boost model={model} ACCEPTED")
+                return out
+
+        _rdebug("all models exhausted, returning original text")
         return text
 
     def close(self):
@@ -109,19 +213,62 @@ class TextRewriter:
             self._client.close()
 
 
-def _build_prompt(style: str) -> str:
+def _build_prompt(style: str, has_pause_hints: bool) -> str:
     style_rule = _style_rule(style)
+    pause_rule = (
+        "会提供停顿提示（Pause hints）时：仅作为参考，不要机械地在每个停顿处都用句号。"
+        if has_pause_hints
+        else ""
+    )
     return (
         "你是实时听写文本修复器，只做微编辑。"
         "允许操作: 断句、标点修正、大小写修正、中英文空格修正。"
         "禁止操作: 改写词序、同义替换、增删事实、总结解释扩写。"
         "必须保留: 专有名词、产品名、命令、路径、URL、邮箱、数字、单位、英文缩写(如 API/VPS/Terminal)。"
         "必须逐字保留原文所有非标点字符（内容与顺序都一致），只允许插入或调整标点和空格。"
-        "断句要求: 有明显停顿语义时拆成短句，避免整段仅句末一个标点。"
-        "中文优先自然短句(建议每句约 8-24 字)；英文可修复 run-on sentence，但不改词。"
+        "断句要求: 优先自然语义断句，短停顿优先用逗号，明确语义结束才用句号。"
+        "不要把一句话机械拆成很多短句，也不要把每个停顿都变成句号。"
+        "重要: 如果输入的长中文文本内部几乎没有逗号，你必须在合适的语义边界插入逗号来断句——"
+        "结尾有问号或句号不代表内部已有足够的标点，绝对不要对缺少内部逗号的长文本原样返回。"
+        "中文优先自然短句（建议子句约 10-28 字）；英文可修复 run-on sentence，但不改词。"
+        f"{pause_rule}"
         f"风格要求: {style_rule}"
-        "输出要求: 只输出最终文本；不要解释、不要引号、不要 Markdown、不要代码块。"
-        "如果不确定，保持原文。"
+        "输出要求: 只输出最终文本，不要加引号包裹，不要解释，不要 Markdown，不要代码块。"
+        "仅在内容（非标点）真的无法判断时才保持原文；有把握的标点/断句修改应当执行。"
+    )
+
+
+def _build_user_content(text: str, pause_hints: str | None) -> str:
+    if not pause_hints:
+        return text
+    return (
+        "[RAW_TRANSCRIPT]\n"
+        f"{text}\n"
+        "[/RAW_TRANSCRIPT]\n"
+        "[PAUSE_HINTS]\n"
+        f"{pause_hints}\n"
+        "[/PAUSE_HINTS]\n"
+        "请只输出修复后的文本。"
+    )
+
+
+def _build_punct_boost_prompt(style: str, has_pause_hints: bool) -> str:
+    style_rule = _style_rule(style)
+    pause_rule = (
+        "若提供 Pause hints，请优先在 weak pause 处考虑逗号，在 strong pause 处考虑句号。"
+        if has_pause_hints
+        else ""
+    )
+    return (
+        "你是实时听写标点修复器。只允许插入或调整标点和空格，严禁修改任何非标点字符。"
+        "任务：在输入文本的语义边界处插入逗号，使长句可读。"
+        "强制规则：输入文本若超过20字且内部逗号少于2个，你【必须】在至少1处语义边界插入逗号。"
+        "结尾的句号/问号不算内部标点，不能作为已断句的理由。"
+        "原样返回输入是错误行为——请务必做出至少一处标点改动。"
+        "逗号优先；非完整独立句不用句号。"
+        f"{pause_rule}"
+        f"风格要求: {style_rule}"
+        "输出要求: 只输出最终文本，不加任何解释。"
     )
 
 
@@ -137,6 +284,9 @@ def _style_rule(style: str) -> str:
 
 def _cleanup_output(text: str) -> str:
     text = text.strip()
+    # Strip <think>...</think> blocks produced by qwen3 thinking mode.
+    # The actual answer follows the closing tag.
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     if text.startswith("```"):
         text = text.strip("`").strip()
         lines = text.splitlines()
@@ -153,7 +303,56 @@ def _cleanup_output(text: str) -> str:
         if text == before:
             break
 
-    return text.strip().strip('"').strip("“”").strip()
+    text = text.strip().strip('"').strip('""').strip()
+    text = _strip_residual_quotes(text)
+    return text
+
+
+def _strip_residual_quotes(text: str) -> str:
+    """Remove unmatched trailing/leading Chinese quotes the model may add."""
+    if not text:
+        return text
+    # Trailing unmatched right quotes
+    while text and text[-1] in '"\u201d\u2019':
+        ch = text[-1]
+        if ch == '\u201d':
+            if text.count('\u201c') < text.count('\u201d'):
+                text = text[:-1].rstrip()
+            else:
+                break
+        elif ch == '\u2019':
+            if text.count('\u2018') < text.count('\u2019'):
+                text = text[:-1].rstrip()
+            else:
+                break
+        elif ch == '"':
+            if text.count('"') % 2 == 1:
+                text = text[:-1].rstrip()
+            else:
+                break
+        else:
+            break
+    # Leading unmatched left quotes
+    while text and text[0] in '"\u201c\u2018':
+        ch = text[0]
+        if ch == '\u201c':
+            if text.count('\u201d') < text.count('\u201c'):
+                text = text[1:].lstrip()
+            else:
+                break
+        elif ch == '\u2018':
+            if text.count('\u2019') < text.count('\u2018'):
+                text = text[1:].lstrip()
+            else:
+                break
+        elif ch == '"':
+            if text.count('"') % 2 == 1:
+                text = text[1:].lstrip()
+            else:
+                break
+        else:
+            break
+    return text
 
 
 def _is_safe_micro_edit(source: str, rewritten: str) -> bool:
@@ -286,6 +485,28 @@ def _looks_too_different(source: str, rewritten: str) -> bool:
 
 def _content_tokens(text: str) -> set[str]:
     return {ch for ch in text if _CONTENT_RE.match(ch)}
+
+
+def _needs_punctuation_boost(text: str, style: str) -> bool:
+    if style in {STYLE_CODE, STYLE_ENGLISH}:
+        return False
+    content_len = len(_normalized_content(text))
+    if content_len < 24:
+        return False
+    punct_count = sum(1 for ch in text if ch in _SENTENCE_PUNCT)
+    return punct_count == 0 or (content_len >= 42 and punct_count < 2)
+
+
+def _punctuation_gain(source: str, rewritten: str) -> int:
+    src_count = sum(1 for ch in source if ch in _SENTENCE_PUNCT)
+    dst_count = sum(1 for ch in rewritten if ch in _SENTENCE_PUNCT)
+    return dst_count - src_count
+
+
+def _rdebug(message: str) -> None:
+    """Print debug messages when VOICETYPER_REWRITER_DEBUG=1."""
+    if _REWRITER_DEBUG:
+        print(f"[Rewriter] {message}")
 
 
 def _load_terms_map(path: Path) -> dict[str, str]:

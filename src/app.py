@@ -7,6 +7,9 @@ from pynput import keyboard
 
 from src.config import (
     MODE_TOGGLE,
+    AI_FIRST_ENABLED,
+    DEBUG_PIPELINE_ENABLED,
+    DEBUG_PIPELINE_MAX_CHARS,
     LIVE_PREVIEW_ENABLED,
     LIVE_PREVIEW_INTERVAL_SECS,
     LIVE_PREVIEW_MIN_DELTA_SECS,
@@ -33,7 +36,7 @@ from src.text_formatter import (
     format_text,
 )
 from src.text_rewriter import TextRewriter
-from src.pause_segmenter import apply_pause_segmentation
+from src.pause_segmenter import apply_pause_segmentation, build_pause_hints
 from src.visual_hud import VisualHUD
 from src.voice_commands import (
     parse_voice_command,
@@ -129,6 +132,40 @@ class VoiceTyperApp(rumps.App):
             self._notifications_enabled = False
             print("[VoiceTyper] macOS notification center unavailable; continuing without alerts.")
             print(f"[VoiceTyper] Notification error: {exc}")
+
+    def _clip_debug(self, text: str | None) -> str:
+        if text is None:
+            return ""
+        s = str(text).replace("\n", "\\n")
+        if DEBUG_PIPELINE_MAX_CHARS > 0 and len(s) > DEBUG_PIPELINE_MAX_CHARS:
+            return f"{s[:DEBUG_PIPELINE_MAX_CHARS]}..."
+        return s
+
+    def _log_pipeline(
+        self,
+        *,
+        ai_first: bool,
+        ai_first_config: bool,
+        rewrite_enabled: bool,
+        asr_text: str,
+        pause_hints: str | None,
+        rewritten: str,
+        final_text: str,
+    ) -> None:
+        if not DEBUG_PIPELINE_ENABLED:
+            return
+        print("[VoiceTyper][Pipeline] ---")
+        print(f"[VoiceTyper][Pipeline] mode={'AI-first' if ai_first else 'Rule-first'}")
+        print(
+            "[VoiceTyper][Pipeline] flags : "
+            f"AI_FIRST_ENABLED={ai_first_config} "
+            f"AI_REWRITE_ACTIVE={rewrite_enabled}"
+        )
+        print(f"[VoiceTyper][Pipeline] ASR   : {self._clip_debug(asr_text)}")
+        if pause_hints:
+            print(f"[VoiceTyper][Pipeline] Hints : {self._clip_debug(pause_hints)}")
+        print(f"[VoiceTyper][Pipeline] AI    : {self._clip_debug(rewritten)}")
+        print(f"[VoiceTyper][Pipeline] Final : {self._clip_debug(final_text)}")
 
     # ── Hotkey listener ──────────────────────────────────────────
 
@@ -263,13 +300,44 @@ class VoiceTyperApp(rumps.App):
                             sound=False,
                         )
                     else:
-                        pause_segmented = apply_pause_segmentation(
-                            text=text,
-                            segments=result.get("segments"),
-                            style=self.input_style,
+                        segments = result.get("segments")
+                        ai_first_config = AI_FIRST_ENABLED
+                        rewrite_enabled = self.rewriter.enabled
+                        ai_first_active = ai_first_config and rewrite_enabled
+                        rewrite_input = text
+                        pause_hints = None
+
+                        if ai_first_active:
+                            pause_hints = build_pause_hints(segments)
+                        else:
+                            rewrite_input = apply_pause_segmentation(
+                                text=text,
+                                segments=segments,
+                                style=self.input_style,
+                            )
+
+                        rewritten = self.rewriter.rewrite(
+                            rewrite_input,
+                            self.input_style,
+                            pause_hints=pause_hints,
                         )
-                        rewritten = self.rewriter.rewrite(pause_segmented, self.input_style)
+                        if ai_first_active and rewritten == rewrite_input:
+                            # AI no-op fallback: use pause-based deterministic punctuation.
+                            rewritten = apply_pause_segmentation(
+                                text=rewrite_input,
+                                segments=segments,
+                                style=self.input_style,
+                            )
                         final_text = format_text(rewritten, self.input_style)
+                        self._log_pipeline(
+                            ai_first=ai_first_active,
+                            ai_first_config=ai_first_config,
+                            rewrite_enabled=rewrite_enabled,
+                            asr_text=text,
+                            pause_hints=pause_hints,
+                            rewritten=rewritten,
+                            final_text=final_text,
+                        )
                         if not final_text:
                             self.status_item.title = "Error: empty text"
                             self.visual_hud.show_error("Empty text")

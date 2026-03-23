@@ -104,18 +104,28 @@ export VOICETYPER_AI_REWRITE_ENABLED=1
 export VOICETYPER_AI_REWRITE_MODELS="qwen/qwen3-32b"
 export VOICETYPER_AI_REWRITE_TIMEOUT_SECS=8
 export VOICETYPER_AI_REWRITE_MAX_CHARS=700
+# optional: AI-first flow (recommended)
+export VOICETYPER_AI_FIRST_ENABLED=1
 # optional: short utterances won't auto-append final period if below threshold
 export VOICETYPER_AUTO_TERMINAL_MIN_CHARS=14
+# optional: enable deterministic CJK clause-split fallback rules
+export VOICETYPER_RULE_CJK_SPLIT_FALLBACK_ENABLED=0
 
-# optional: pause-aware segmentation (Whisper segments)
+# optional: pause-aware deterministic fallback segmentation
 export VOICETYPER_PAUSE_SEGMENT_ENABLED=1
 export VOICETYPER_PAUSE_BREAK_SECS=0.35
 export VOICETYPER_PAUSE_STRONG_BREAK_SECS=0.75
 export VOICETYPER_PAUSE_MIN_CHARS=8
+# optional: pause hint extraction for AI-first rewrite
+export VOICETYPER_PAUSE_HINT_MIN_GAP_SECS=0.45
+export VOICETYPER_PAUSE_HINT_MAX_ITEMS=4
 # optional: promote weak punctuation (comma/semicolon) to stronger stop on long pause
 export VOICETYPER_PAUSE_PROMOTE_WEAK_PUNCT=0
 # debug pause segmentation decisions in terminal
 export VOICETYPER_PAUSE_SEGMENT_DEBUG=0
+# debug full text pipeline (ASR / AI rewrite / final output) in terminal
+export VOICETYPER_DEBUG_PIPELINE_ENABLED=0
+export VOICETYPER_DEBUG_PIPELINE_MAX_CHARS=240
 ```
 
 If `GROQ_API_KEY` is not set, app falls back to:
@@ -157,8 +167,8 @@ After launch (`python3 run.py`), verify:
 2. During recording, confirm status may show `Live: ...` when live preview is enabled.
 3. During transcription, icon changes to ⏳ and returns to 🎙️ afterward.
 4. If transcription succeeds, status shows `Copied+Pasted: ...` (or `Copied only: ...`) and appears in history.
-5. For long Chinese dictation with pauses, confirm output is segmented naturally (AI rewrite enabled).
-   Pause-aware segmentation can insert comma/period before AI rewrite.
+5. For long Chinese dictation with pauses, confirm output is segmented naturally (AI-first rewrite enabled).
+   Pause hints are sent to AI; deterministic pause segmentation is only fallback.
 6. Say `english mode` (or `中文模式`) and verify style switches.
 7. Say `new line` and `undo` to verify voice commands execute.
 8. If API/network fails, app shows an error notification and stays responsive.
@@ -169,6 +179,7 @@ After launch (`python3 run.py`), verify:
 - No paste output: check Accessibility permission for Terminal/Python; text should still be in clipboard (`Cmd+V` manually).
 - API usage too high: set `VOICETYPER_LIVE_PREVIEW_ENABLED=0` or increase `VOICETYPER_LIVE_PREVIEW_INTERVAL_SECS`.
 - AI rewrite latency/cost too high: set `VOICETYPER_AI_REWRITE_ENABLED=0` or keep only one fast model in `VOICETYPER_AI_REWRITE_MODELS`.
+- Too many rule-like commas/splits: keep `VOICETYPER_AI_FIRST_ENABLED=1` and `VOICETYPER_RULE_CJK_SPLIT_FALLBACK_ENABLED=0`.
 - Too many auto-appended sentence endings: increase `VOICETYPER_AUTO_TERMINAL_MIN_CHARS` (e.g. `18`).
 - Pause segmentation too aggressive: increase `VOICETYPER_PAUSE_BREAK_SECS` / `VOICETYPER_PAUSE_STRONG_BREAK_SECS`.
 - Pause segmentation still not splitting: lower `VOICETYPER_PAUSE_BREAK_SECS` (e.g. `0.28`) and set `VOICETYPER_PAUSE_SEGMENT_DEBUG=1` to inspect applied pause boundaries.

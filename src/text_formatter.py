@@ -2,7 +2,7 @@
 import re
 import unicodedata
 
-from src.config import AUTO_TERMINAL_MIN_CHARS
+from src.config import AUTO_TERMINAL_MIN_CHARS, RULE_CJK_SPLIT_FALLBACK_ENABLED
 
 STYLE_NORMAL = "normal"
 STYLE_ENGLISH = "english"
@@ -96,7 +96,8 @@ def _format_chinese(text: str) -> str:
             ";": "；",
         })
     )
-    text = _smart_split_long_cjk_clause(text)
+    if RULE_CJK_SPLIT_FALLBACK_ENABLED:
+        text = _smart_split_long_cjk_clause(text)
     if text and not _ends_with_terminal_punctuation(text, "。！？") and _should_auto_append_terminal(text):
         text = _append_terminal_punctuation(text, "。")
     return text
@@ -109,7 +110,7 @@ def _format_mixed(text: str) -> str:
     text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
     text = re.sub(r"\s+([，。！？；：,.!?;:])", r"\1", text)
     text = re.sub(r"([,.;:!?])([A-Za-z0-9])", r"\1 \2", text)
-    if _cjk_ratio(text) >= 0.45:
+    if RULE_CJK_SPLIT_FALLBACK_ENABLED and _cjk_ratio(text) >= 0.45:
         text = text.translate(str.maketrans({",": "，", ";": "；", ":": "："}))
         text = _smart_split_long_cjk_clause(text)
 

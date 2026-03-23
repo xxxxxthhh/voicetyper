@@ -44,7 +44,7 @@ AI_REWRITE_MODELS = [
     m.strip()
     for m in os.environ.get(
         "VOICETYPER_AI_REWRITE_MODELS",
-        "qwen/qwen3-32b,llama-3.1-8b-instant,llama-3.3-70b-versatile",
+        "qwen/qwen3-32b",
     ).split(",")
     if m.strip()
 ]
@@ -54,6 +54,12 @@ AI_REWRITE_TIMEOUT_SECS = float(
     os.environ.get("VOICETYPER_AI_REWRITE_TIMEOUT_SECS", "8")
 )
 AI_REWRITE_MAX_CHARS = int(os.environ.get("VOICETYPER_AI_REWRITE_MAX_CHARS", "700"))
+
+# Auto terminal punctuation behavior.
+# Only append terminal punctuation automatically when utterance is long enough.
+AUTO_TERMINAL_MIN_CHARS = int(
+    os.environ.get("VOICETYPER_AUTO_TERMINAL_MIN_CHARS", "14")
+)
 
 # Pause-aware sentence segmentation (uses Whisper segment timing).
 PAUSE_SEGMENT_ENABLED = os.environ.get("VOICETYPER_PAUSE_SEGMENT_ENABLED", "1") != "0"

@@ -13,7 +13,7 @@ Press a hotkey, speak, and text appears at your cursor.
 - **AI punctuation/segmentation rewrite** with Groq chat model fallback chain
 - **Auto-paste** to current cursor position
 - **Clipboard-first output** (always copies text, then tries to paste into previous app)
-- **On-screen visual HUD** for Recording / Transcribing / Done states
+- **On-screen visual HUD** for Recording / Transcribing / Done states (recording dot blinks)
 - **Voice commands** (换行 / 撤销 / 风格切换)
 - **Smart text formatting** (Normal / English / Chinese / Code)
 - **SQLite history** of all transcriptions
@@ -101,9 +101,11 @@ export VOICETYPER_TRANSCRIBE_HARD_TIMEOUT_SECS=45
 
 # optional: AI rewrite (punctuation + segmentation)
 export VOICETYPER_AI_REWRITE_ENABLED=1
-export VOICETYPER_AI_REWRITE_MODELS="qwen/qwen3-32b,llama-3.1-8b-instant,llama-3.3-70b-versatile"
+export VOICETYPER_AI_REWRITE_MODELS="qwen/qwen3-32b"
 export VOICETYPER_AI_REWRITE_TIMEOUT_SECS=8
 export VOICETYPER_AI_REWRITE_MAX_CHARS=700
+# optional: short utterances won't auto-append final period if below threshold
+export VOICETYPER_AUTO_TERMINAL_MIN_CHARS=14
 
 # optional: pause-aware segmentation (Whisper segments)
 export VOICETYPER_PAUSE_SEGMENT_ENABLED=1
@@ -167,6 +169,7 @@ After launch (`python3 run.py`), verify:
 - No paste output: check Accessibility permission for Terminal/Python; text should still be in clipboard (`Cmd+V` manually).
 - API usage too high: set `VOICETYPER_LIVE_PREVIEW_ENABLED=0` or increase `VOICETYPER_LIVE_PREVIEW_INTERVAL_SECS`.
 - AI rewrite latency/cost too high: set `VOICETYPER_AI_REWRITE_ENABLED=0` or keep only one fast model in `VOICETYPER_AI_REWRITE_MODELS`.
+- Too many auto-appended sentence endings: increase `VOICETYPER_AUTO_TERMINAL_MIN_CHARS` (e.g. `18`).
 - Pause segmentation too aggressive: increase `VOICETYPER_PAUSE_BREAK_SECS` / `VOICETYPER_PAUSE_STRONG_BREAK_SECS`.
 - Pause segmentation still not splitting: lower `VOICETYPER_PAUSE_BREAK_SECS` (e.g. `0.28`) and set `VOICETYPER_PAUSE_SEGMENT_DEBUG=1` to inspect applied pause boundaries.
 - Prefer preserving weak punctuation (comma/dunhao): keep `VOICETYPER_PAUSE_PROMOTE_WEAK_PUNCT=0` (default).

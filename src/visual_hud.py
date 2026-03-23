@@ -37,6 +37,8 @@ class VisualHUD:
     PAD_RIGHT: Final[float] = 12.0
     DOT_GAP: Final[float] = 10.0
     LABEL_FONT_SIZE: Final[float] = 13.0
+    BLINK_INTERVAL_SECS: Final[float] = 0.42
+    BLINK_DIM_OPACITY: Final[float] = 0.32
 
     def __init__(self, enabled: bool = True):
         self._enabled = enabled
@@ -47,6 +49,8 @@ class VisualHUD:
         self._lock = threading.Lock()
         self._state_seq = 0
         self._hide_timer: threading.Timer | None = None
+        self._blink_timer: threading.Timer | None = None
+        self._blink_visible = True
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
@@ -54,7 +58,7 @@ class VisualHUD:
             self.hide()
 
     def show_recording(self) -> None:
-        self._show("Recording", kind="recording", auto_hide_secs=None)
+        self._show("Recording...", kind="recording", auto_hide_secs=None)
 
     def show_transcribing(self) -> None:
         self._show("Transcribing...", kind="transcribing", auto_hide_secs=None)
@@ -68,6 +72,8 @@ class VisualHUD:
     def hide(self) -> None:
         self._bump_state_seq()
         self._cancel_hide_timer()
+        self._cancel_blink_timer()
+        self._blink_visible = True
         callAfter(self._hide_on_main)
 
     def close(self) -> None:
@@ -79,7 +85,11 @@ class VisualHUD:
             return
         seq = self._bump_state_seq()
         self._cancel_hide_timer()
+        self._cancel_blink_timer()
+        self._blink_visible = True
         callAfter(self._show_on_main, text, kind)
+        if kind == "recording":
+            self._schedule_blink(seq, self.BLINK_INTERVAL_SECS)
         if auto_hide_secs and auto_hide_secs > 0:
             self._schedule_hide(seq, auto_hide_secs)
 
@@ -108,6 +118,29 @@ class VisualHUD:
         timer.daemon = True
         with self._lock:
             self._hide_timer = timer
+        timer.start()
+
+    def _cancel_blink_timer(self) -> None:
+        timer: threading.Timer | None = None
+        with self._lock:
+            if self._blink_timer is not None:
+                timer = self._blink_timer
+                self._blink_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_blink(self, seq: int, delay_secs: float) -> None:
+        def _blink_if_current():
+            with self._lock:
+                if seq != self._state_seq:
+                    return
+                self._blink_timer = None
+            callAfter(self._toggle_blink_on_main, seq)
+
+        timer = threading.Timer(delay_secs, _blink_if_current)
+        timer.daemon = True
+        with self._lock:
+            self._blink_timer = timer
         timer.start()
 
     def _ensure_window_on_main(self) -> None:
@@ -152,6 +185,7 @@ class VisualHUD:
             dot_layer.setCornerRadius_(self.DOT_SIZE / 2.0)
             dot_layer.setMasksToBounds_(True)
             dot_layer.setBackgroundColor_(self._accent_color("recording").CGColor())
+            dot_layer.setOpacity_(1.0)
 
         label = NSTextField.alloc().initWithFrame_(
             NSMakeRect(
@@ -167,7 +201,7 @@ class VisualHUD:
         label.setSelectable_(False)
         label.setAlignment_(NSLeftTextAlignment)
         label.setFont_(NSFont.systemFontOfSize_weight_(self.LABEL_FONT_SIZE, NSFontWeightSemibold))
-        label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.95))
+        label.setTextColor_(self._text_color("recording"))
 
         container.addSubview_(dot)
         container.addSubview_(label)
@@ -182,7 +216,7 @@ class VisualHUD:
     def _fill_color(self, kind: str):
         if kind == "recording":
             return NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.22, 0.12, 0.13, 0.90
+                0.79, 0.92, 0.84, 0.95
             )
         if kind == "transcribing":
             return NSColor.colorWithCalibratedRed_green_blue_alpha_(
@@ -199,7 +233,7 @@ class VisualHUD:
     def _accent_color(self, kind: str):
         if kind == "recording":
             return NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.98, 0.34, 0.36, 1.0
+                0.20, 0.58, 0.34, 1.0
             )
         if kind == "transcribing":
             return NSColor.colorWithCalibratedRed_green_blue_alpha_(
@@ -212,6 +246,13 @@ class VisualHUD:
         return NSColor.colorWithCalibratedRed_green_blue_alpha_(
             0.99, 0.46, 0.50, 1.0
         )
+
+    def _text_color(self, kind: str):
+        if kind == "recording":
+            return NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.12, 0.28, 0.18, 0.98
+            )
+        return NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.95)
 
     def _position_window_on_main(self) -> None:
         if self._window is None:
@@ -271,8 +312,26 @@ class VisualHUD:
         dot_layer = self._dot.layer()
         if dot_layer is not None:
             dot_layer.setBackgroundColor_(self._accent_color(kind).CGColor())
+            if kind != "recording":
+                dot_layer.setOpacity_(1.0)
+        self._label.setTextColor_(self._text_color(kind))
         self._position_window_on_main()
         self._window.orderFrontRegardless()
+
+    def _toggle_blink_on_main(self, seq: int) -> None:
+        with self._lock:
+            if seq != self._state_seq:
+                return
+        if self._dot is None:
+            return
+        dot_layer = self._dot.layer()
+        if dot_layer is None:
+            return
+
+        self._blink_visible = not self._blink_visible
+        target_opacity = 1.0 if self._blink_visible else self.BLINK_DIM_OPACITY
+        dot_layer.setOpacity_(target_opacity)
+        self._schedule_blink(seq, self.BLINK_INTERVAL_SECS)
 
     def _hide_on_main(self) -> None:
         if self._window is not None:
